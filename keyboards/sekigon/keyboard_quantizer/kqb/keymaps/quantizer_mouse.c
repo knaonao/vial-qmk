@@ -44,12 +44,27 @@ static int16_t  wheel_move_v            = 0;
 static int16_t  wheel_move_h            = 0;
 static uint16_t mouse_gesture_threshold = 50;
 
+// new gesture
+static int16_t  new_gesture_move_x          = 0;
+static int16_t  new_gesture_move_y          = 0;
+uint8_t gesture_buf[3];
+uint8_t gesture_index = 0;
+uint8_t last_dir = 0;
+
 // Start gesture recognition
 static void gesture_start(void) {
     dprint("Gesture start\n");
     gesture_wait   = true;
     gesture_move_x = 0;
     gesture_move_y = 0;
+
+// new gesture init start
+    new_gesture_move_x = 0;
+    new_gesture_move_y = 0;
+    memset(gesture_buf, 0, sizeof(gesture_buf));
+    gesture_index = 0;
+    last_dir = 0;
+// new gesture init end
 }
 
 void set_mouse_gesture_threshold(uint16_t val) {
@@ -110,14 +125,78 @@ static int8_t get_mouse_scale(DYNAMIC_CONFIG_MOUSE_SCALE scale_type) {
     // return dynamic_config_get_mouse_scale(0, scale_type);
 }
 
+// new gesture ADD start
+uint8_t get_gesture_id(const uint8_t *buf) {
+    // 0段（キャンセル）
+    if (buf[0] == 0) {
+        return 0xFF;
+    }
+    // 1段（1方向）
+    if (buf[1] == 0) {
+dprintf("NEW 1 dan\n");
+        return buf[0] - 1; // ID: 0~3
+    }
+    // 2段（2方向）
+    if (buf[2] == 0) {
+dprintf("NEW 2 dan\n");
+        uint8_t first = buf[0] - 1;
+        uint8_t second = buf[1] - 1;
+        return first * 3 + second - (second > first) + 4; // ID: 0~11
+    }
+    // 3段（3方向）
+dprintf("NEW 3 dan\n");
+    if ((buf[0] == buf[1]) || (buf[1] == buf[2])) return 0xFF; // 同じ方向が連続していたら無効
+    uint8_t a = buf[0] - 1;
+    uint8_t b = buf[1] - 1;
+    uint8_t c = buf[2] - 1;
+    uint8_t index = 0;
+    for (uint8_t i = 0; i < 4; i++) {
+        for (uint8_t j = 0; j < 4; j++) {
+            for (uint8_t k = 0; k < 4; k++) {
+                if ((j == i) || (k == j)) continue; // 連続方向だけ除外
+                if (a == i && b == j && c == k) {
+                    return index + 4 + 12;
+                }
+                index++;
+            }
+        }
+    }
+dprintf("NEW nashi\n");
+    return 0xFF; // 該当なし
+}
+// new gesture ADD end
+
 void process_gesture(uint8_t layer, gesture_id_t gesture_id) {
     switch (gesture_id) {
         case GESTURE_DOWN_RIGHT ... GESTURE_UP_RIGHT: {
-            uint16_t keycode = dynamic_config_keymap_keycode_to_keycode(layer, (MATRIX_MSGES_ROW - 1) * 8 + gesture_id - GESTURE_DOWN_RIGHT);
+// new gesture CHG start
+            uint16_t keycode;
+if(gesture_buf[0] == 0){
+dprint("NEW NANAME DO\n");
+            keycode = dynamic_config_keymap_keycode_to_keycode(layer, (MATRIX_MSGES_ROW - 1) * 8 + gesture_id - GESTURE_DOWN_RIGHT);
             if (keycode == MATRIX_MSGES_ROW * 8 + gesture_id - GESTURE_DOWN_RIGHT) {
                 return;
             }
             vial_keycode_tap(keycode);
+}else{
+dprint("NEW TATEYOKO DO\n");
+            uint16_t keycode;
+            dprintf("NEW gesture_id:[%d]\n", gesture_id);
+            for ( uint16_t i = 0;i < 64;i++){
+              dprintf("[%d]", dynamic_config_keymap_keycode_to_keycode(layer, i));
+            }
+            dprintf("\n");
+
+            uint8_t ges_id = get_gesture_id(gesture_buf);
+            dprintf("NEW execute buf:[%d,%d,%d] gesid:%d ", gesture_buf[0],gesture_buf[1],gesture_buf[2], ges_id);
+            if(ges_id != 0xFF){
+              keycode = dynamic_config_keymap_keycode_to_keycode(layer, ges_id);
+              dprintf("keycode:%d", keycode);
+              vial_keycode_tap(keycode);
+            }
+            dprintf("\n");
+}
+// new gesture CHG end
         } break;
         default:
             break;
@@ -266,6 +345,48 @@ void mouse_report_hook(mouse_parse_result_t const* report) {
     if (gesture_wait) {
         gesture_move_x += scaled.x;
         gesture_move_y += scaled.y;
+
+// new gesture ADD start
+        new_gesture_move_x += scaled.x;
+        new_gesture_move_y += scaled.y;
+dprintf("NEW new_gesture_move_x:[%d] new_gesture_move_y:[%d]\n", new_gesture_move_x,new_gesture_move_y);
+        uint8_t dir = 0;
+
+        // 斜め入力チェック
+        // x,y両方がしきい値を超えていて、かつ差が小さい場合のみ斜め入力と判定する
+        if ((abs(new_gesture_move_x) + abs(new_gesture_move_y) >= mouse_gesture_threshold) &&
+            (abs(new_gesture_move_x) * 5 >= abs(new_gesture_move_y) * 4) && (abs(new_gesture_move_y) * 5 >= abs(new_gesture_move_x) * 4)) {
+dprintf("NEW NANAME\n");
+             // 縦横ジェスチャーが始まっていない場合、キャンセルする
+             if(gesture_buf[0] == 0){
+                  new_gesture_move_x = 0;
+                  new_gesture_move_y = 0;
+                  gesture_index = 3;
+             }
+        } else { // 縦横チェック
+            if (new_gesture_move_x > mouse_gesture_threshold) dir = 1;      // R
+            else if (new_gesture_move_x < -mouse_gesture_threshold) dir = 3; // L
+            else if (new_gesture_move_y > mouse_gesture_threshold) dir = 2;  // D
+            else if (new_gesture_move_y < -mouse_gesture_threshold) dir = 4; // U
+        }
+dprintf("NEW dir:%d buf:[%d,%d,%d] index:%d last_dir:%d\n", dir, gesture_buf[0],gesture_buf[1],gesture_buf[2], gesture_index, last_dir);
+        if(dir != 0){
+           new_gesture_move_x = 0;
+           new_gesture_move_y = 0;
+        }
+        if (dir && dir != last_dir) {
+            if (gesture_index < sizeof(gesture_buf)) {
+                gesture_buf[gesture_index++] = dir;
+                last_dir = dir;
+
+dprintf("NEW pushed buf:[%d,%d,%d] index:%d last_dir:%d\n", gesture_buf[0],gesture_buf[1],gesture_buf[2], gesture_index, last_dir);
+            } else {
+                // 4段以上はジェスチャーキャンセル
+                gesture_buf[0] = 0;
+dprintf("NEW CANCELED. buf:[%d,%d,%d] index:%d last_dir:%d\n", gesture_buf[0],gesture_buf[1],gesture_buf[2], gesture_index, last_dir);
+            }
+        }
+// new gesture ADD end
     }
 }
 

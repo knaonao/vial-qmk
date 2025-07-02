@@ -76,9 +76,11 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
             } else {
 //                tap_code(KC_ENT);
 // キーを離したとき、Ctrl+Mを送信
-                register_code(KC_LCTL);
-                tap_code(KC_M);
-                unregister_code(KC_LCTL);
+                if(!is_tapped){
+                    register_code(KC_LCTL);
+                    tap_code(KC_M);
+                    unregister_code(KC_LCTL);
+                }
             	tap_code(KC_INT5);
             }
  	    return false; //override
